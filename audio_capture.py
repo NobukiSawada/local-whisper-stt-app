@@ -74,6 +74,7 @@ def capture_loop(audio_queue, chunk_duration=CHUNK_DURATION, sample_rate=SAMPLE_
             if frames.ndim > 1 and frames.shape[1] > 1:
                 frames = frames.mean(axis=1)
             audio_queue.put(frames.astype("float32"))
+    audio_queue.put(None)  # 番兵: 文字起こしスレッドに録音終了を通知
 
 
 if __name__ == "__main__":
