@@ -3,6 +3,8 @@ soundcard
 soundfile
 numpy
 
-# Step 2以降で追加予定
-# faster-whisper
+# Step 2: 文字起こし
+faster-whisper
+
+# Step 3以降で追加予定
 # customtkinter
