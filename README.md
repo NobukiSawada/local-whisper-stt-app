@@ -1,5 +1,8 @@
 # LoopbackTranscriber
 
+[![Build and Release](https://github.com/NobukiSawada/local-whisper-stt-app/actions/workflows/release.yml/badge.svg)](https://github.com/NobukiSawada/local-whisper-stt-app/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/NobukiSawada/local-whisper-stt-app)](https://github.com/NobukiSawada/local-whisper-stt-app/releases/latest)
+
 Windows のループバック音声（PC から出る音）をリアルタイムでローカル文字起こしする Python アプリです。  
 インターネット接続不要・無料で動作します。
 
@@ -56,11 +59,17 @@ python build.py
 バージョンタグをプッシュすると、Windows ランナーでビルドが走り ZIP が GitHub Releases に自動公開されます。
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 ワークフロー定義: `.github/workflows/release.yml`
+
+**リリース実績**
+
+| バージョン | ステータス | 備考 |
+|-----------|-----------|------|
+| [v1.0.2](https://github.com/NobukiSawada/local-whisper-stt-app/releases/tag/v1.0.2) | 成功 | GitHub Actions を Node.js 24 対応バージョンに更新 |
 
 ## ファイル構成
 
