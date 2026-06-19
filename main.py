@@ -1,11 +1,12 @@
 """
-Step 6: Progress panel added — recording timer, chunk counter, ETA.
+Step 7: Added error handling, safe close, timestamps, copy button,
+        chunk-duration selector, model selector, and global hotkeys.
 """
 
 import queue
 import time
 import threading
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
@@ -15,15 +16,17 @@ from transcriber import load_model, transcribe_array
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
-CHUNK_DURATION = 5  # seconds per audio chunk
+MODEL_OPTIONS = ["large-v3-turbo", "medium", "small"]
+CHUNK_OPTIONS = {"3秒": 3, "5秒": 5, "10秒": 10, "15秒": 15}
 
 
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("ループバック文字起こし")
-        self.geometry("720x600")
+        self.geometry("720x660")
         self.resizable(True, True)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._model = None
         self._recording_stop_event = threading.Event()
@@ -37,30 +40,58 @@ class App(ctk.CTk):
         self._chunk_times: list[float] = []
 
         self._build_ui()
+        self._setup_hotkeys()
         self._load_model_async()
 
     # ------------------------------------------------------------------ UI --
 
     def _build_ui(self):
+        # ステータス
         self._status = ctk.CTkLabel(self, text="モデル読み込み中...", anchor="w")
         self._status.pack(fill="x", padx=20, pady=(14, 0))
 
+        # 設定行（モデル・チャンク長）
+        settings_frame = ctk.CTkFrame(self, fg_color="transparent")
+        settings_frame.pack(fill="x", padx=20, pady=(6, 0))
+
+        ctk.CTkLabel(settings_frame, text="モデル:").pack(side="left", padx=(0, 4))
+        self._model_var = ctk.StringVar(value=MODEL_OPTIONS[0])
+        self._model_menu = ctk.CTkOptionMenu(
+            settings_frame, values=MODEL_OPTIONS,
+            variable=self._model_var, width=160,
+            command=self._on_model_changed,
+        )
+        self._model_menu.pack(side="left", padx=(0, 16))
+
+        ctk.CTkLabel(settings_frame, text="チャンク長:").pack(side="left", padx=(0, 4))
+        self._chunk_var = ctk.StringVar(value="5秒")
+        self._chunk_menu = ctk.CTkOptionMenu(
+            settings_frame, values=list(CHUNK_OPTIONS.keys()),
+            variable=self._chunk_var, width=100,
+        )
+        self._chunk_menu.pack(side="left")
+
+        # ボタン行
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(pady=8)
 
-        self._start_btn = ctk.CTkButton(btn_frame, text="開始", width=100,
+        self._start_btn = ctk.CTkButton(btn_frame, text="開始 (Alt+R)", width=120,
                                         command=self._start, state="disabled")
-        self._start_btn.pack(side="left", padx=6)
+        self._start_btn.pack(side="left", padx=4)
 
-        self._stop_btn = ctk.CTkButton(btn_frame, text="停止", width=100,
+        self._stop_btn = ctk.CTkButton(btn_frame, text="停止 (Alt+S)", width=120,
                                        command=self._stop, state="disabled")
-        self._stop_btn.pack(side="left", padx=6)
+        self._stop_btn.pack(side="left", padx=4)
 
-        self._save_btn = ctk.CTkButton(btn_frame, text="保存", width=100,
+        self._copy_btn = ctk.CTkButton(btn_frame, text="コピー", width=90,
+                                       command=self._copy, state="disabled")
+        self._copy_btn.pack(side="left", padx=4)
+
+        self._save_btn = ctk.CTkButton(btn_frame, text="保存", width=90,
                                        command=self._save, state="disabled")
-        self._save_btn.pack(side="left", padx=6)
+        self._save_btn.pack(side="left", padx=4)
 
-        # --- 進捗パネル ---
+        # 進捗パネル
         info_frame = ctk.CTkFrame(self)
         info_frame.pack(fill="x", padx=20, pady=(0, 8))
 
@@ -80,25 +111,69 @@ class App(ctk.CTk):
         self._progress_bar.set(0)
         self._progress_bar.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-        self._eta_label = ctk.CTkLabel(row2, text="0%完了", anchor="e", width=260)
+        self._eta_label = ctk.CTkLabel(row2, text="0%完了", anchor="e", width=280)
         self._eta_label.pack(side="right")
 
-        # --- テキストエリア ---
+        # テキストエリア
         self._textbox = ctk.CTkTextbox(self, wrap="word")
         self._textbox.pack(fill="both", expand=True, padx=20, pady=(0, 16))
 
-    # --------------------------------------------------------- model loading --
+    # --------------------------------------------------------- hotkeys --
 
-    def _load_model_async(self):
+    def _setup_hotkeys(self):
+        try:
+            import keyboard
+            keyboard.add_hotkey("alt+r", lambda: self.after(0, self._hotkey_start))
+            keyboard.add_hotkey("alt+s", lambda: self.after(0, self._hotkey_stop))
+        except Exception:
+            # keyboard ライブラリ未インストール or 権限不足の場合は無効化
+            pass
+
+    def _hotkey_start(self):
+        if str(self._start_btn.cget("state")) == "normal":
+            self._start()
+
+    def _hotkey_stop(self):
+        if str(self._stop_btn.cget("state")) == "normal":
+            self._stop()
+
+    # ------------------------------------------------------- safe close --
+
+    def _on_close(self):
+        self._recording_stop_event.set()
+        self._transcribe_stop_event.set()
+        if self._audio_queue:
+            self._audio_queue.put(None)
+        self.destroy()
+
+    # ------------------------------------------------------- model loading --
+
+    def _load_model_async(self, model_size=None):
+        if model_size is None:
+            model_size = self._model_var.get()
+
         def _load():
-            model, _ = load_model()
-            self._model = model
-            self.after(0, self._on_model_ready)
+            try:
+                model, _ = load_model(model_size=model_size)
+                self._model = model
+                self.after(0, self._on_model_ready)
+            except Exception as e:
+                self.after(0, lambda: self._set_status(f"モデル読み込み失敗: {e}"))
+
         threading.Thread(target=_load, daemon=True).start()
 
     def _on_model_ready(self):
         self._set_status("準備完了")
         self._start_btn.configure(state="normal")
+        self._model_menu.configure(state="normal")
+        self._chunk_menu.configure(state="normal")
+
+    def _on_model_changed(self, model_name: str):
+        self._start_btn.configure(state="disabled")
+        self._model_menu.configure(state="disabled")
+        self._chunk_menu.configure(state="disabled")
+        self._set_status(f"モデル変更中: {model_name} ...")
+        self._load_model_async(model_size=model_name)
 
     # --------------------------------------------------------------- start --
 
@@ -121,15 +196,24 @@ class App(ctk.CTk):
         self._set_status("録音中...")
         self._start_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
+        self._copy_btn.configure(state="disabled")
         self._save_btn.configure(state="disabled")
+        self._model_menu.configure(state="disabled")
+        self._chunk_menu.configure(state="disabled")
+
+        chunk_duration = CHUNK_OPTIONS[self._chunk_var.get()]
 
         def _capture_worker():
-            capture_loop(
-                audio_queue=self._audio_queue,
-                chunk_duration=CHUNK_DURATION,
-                stop_event=self._recording_stop_event,
-                on_chunk_recorded=lambda: self.after(0, self._on_chunk_recorded),
-            )
+            try:
+                capture_loop(
+                    audio_queue=self._audio_queue,
+                    chunk_duration=chunk_duration,
+                    stop_event=self._recording_stop_event,
+                    on_chunk_recorded=lambda: self.after(0, self._on_chunk_recorded),
+                )
+            except Exception as e:
+                self.after(0, lambda: self._set_status(f"録音エラー: {e}"))
+                self._audio_queue.put(None)
             self.after(0, self._on_recording_stopped)
 
         threading.Thread(target=_capture_worker, daemon=True).start()
@@ -156,7 +240,7 @@ class App(ctk.CTk):
         self._set_status("録音停止・文字起こし中...")
         self._stop_btn.configure(state="normal")
 
-    # ------------------------------------------------------- recording timer --
+    # ---------------------------------------------------- recording timer --
 
     def _tick(self):
         if not self._is_recording:
@@ -166,7 +250,7 @@ class App(ctk.CTk):
         self._rec_time_label.configure(text=f"録音時間:  {m:02d}:{s:02d}")
         self.after(1000, self._tick)
 
-    # ---------------------------------------------------- chunk event handlers --
+    # ------------------------------------------------- chunk event handlers --
 
     def _on_chunk_recorded(self):
         self._total_chunks += 1
@@ -195,40 +279,61 @@ class App(ctk.CTk):
         else:
             self._eta_label.configure(text=f"{ratio*100:.0f}%完了")
 
-    # --------------------------------------------------- transcription loop --
+    # ----------------------------------------------- transcription loop --
 
     def _transcribe_loop(self):
+        chunk_index = 0
+        chunk_duration = CHUNK_OPTIONS[self._chunk_var.get()]
+
         while True:
             chunk = self._audio_queue.get()
             if chunk is None or self._transcribe_stop_event.is_set():
                 break
 
+            time_offset = chunk_index * chunk_duration
             t0 = time.time()
 
-            def on_segment(text):
-                self.after(0, lambda t=text: self._append_text(t))
+            def on_segment(text, ts):
+                self.after(0, lambda t=text, s=ts: self._append_text(t, s))
 
-            transcribe_array(chunk, self._model, on_segment=on_segment)
+            try:
+                transcribe_array(chunk, self._model, on_segment=on_segment,
+                                 time_offset=time_offset)
+            except Exception as e:
+                self.after(0, lambda: self._set_status(f"文字起こしエラー: {e}"))
+
             elapsed = time.time() - t0
             self.after(0, lambda e=elapsed: self._on_chunk_done(e))
+            chunk_index += 1
 
         self.after(0, self._on_done)
 
     def _on_done(self):
         self._set_status("完了")
         self._start_btn.configure(state="normal")
+        self._copy_btn.configure(state="normal")
         self._save_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
+        self._model_menu.configure(state="normal")
+        self._chunk_menu.configure(state="normal")
         self._update_progress()
 
     # ---------------------------------------------------------------- helpers --
 
-    def _append_text(self, text):
-        self._textbox.insert("end", text + "\n")
+    def _append_text(self, text, timestamp: str = ""):
+        line = f"[{timestamp}] {text}\n" if timestamp else f"{text}\n"
+        self._textbox.insert("end", line)
         self._textbox.see("end")
 
     def _set_status(self, text):
         self._status.configure(text=text)
+
+    def _copy(self):
+        text = self._textbox.get("1.0", "end").strip()
+        if text:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self._set_status("クリップボードにコピーしました")
 
     def _save(self):
         path = filedialog.asksaveasfilename(
@@ -238,9 +343,12 @@ class App(ctk.CTk):
         if not path:
             return
         text = self._textbox.get("1.0", "end").strip()
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-        self._set_status(f"保存完了: {path}")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self._set_status(f"保存完了: {path}")
+        except Exception as e:
+            messagebox.showerror("保存エラー", str(e))
 
 
 if __name__ == "__main__":

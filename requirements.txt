@@ -8,3 +8,6 @@ faster-whisper
 
 # GUI
 customtkinter
+
+# グローバルホットキー
+keyboard
