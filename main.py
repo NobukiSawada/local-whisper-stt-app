@@ -1,18 +1,21 @@
 """
-Step 4: CustomTkinter GUI for loopback transcription.
-Records all audio first, then transcribes after stopping.
+Step 5: Concurrent recording + transcription GUI.
+Records in chunks and transcribes in parallel; continues transcribing after recording stops.
 """
 
+import queue
 import threading
 from tkinter import filedialog
 
 import customtkinter as ctk
 
-from audio_capture import record_to_buffer
+from audio_capture import capture_loop
 from transcriber import load_model, transcribe_array
 
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
+
+CHUNK_DURATION = 5  # seconds per audio chunk
 
 
 class App(ctk.CTk):
@@ -23,8 +26,10 @@ class App(ctk.CTk):
         self.resizable(True, True)
 
         self._model = None
-        self._audio_buffer = None
-        self._stop_event = threading.Event()
+        self._recording_stop_event = threading.Event()
+        self._transcribe_stop_event = threading.Event()
+        self._audio_queue = None
+        self._is_recording = False
 
         self._build_ui()
         self._load_model_async()
@@ -64,50 +69,68 @@ class App(ctk.CTk):
         self._set_status("準備完了")
         self._start_btn.configure(state="normal")
 
-    # --- recording ---
+    # --- start ---
 
     def _start(self):
-        self._stop_event.clear()
-        self._audio_buffer = None
+        self._recording_stop_event.clear()
+        self._transcribe_stop_event.clear()
+        self._is_recording = True
+        self._audio_queue = queue.Queue()  # 無制限キュー: 録音スレッドをブロックしない
         self._textbox.delete("1.0", "end")
         self._set_status("録音中...")
         self._start_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
         self._save_btn.configure(state="disabled")
 
-        def _record():
-            self._audio_buffer = record_to_buffer(self._stop_event)
-            self.after(0, self._on_recording_done)
+        def _capture_worker():
+            capture_loop(
+                audio_queue=self._audio_queue,
+                chunk_duration=CHUNK_DURATION,
+                stop_event=self._recording_stop_event,
+            )
+            self.after(0, self._on_recording_stopped)
 
-        threading.Thread(target=_record, daemon=True).start()
+        threading.Thread(target=_capture_worker, daemon=True).start()
+        threading.Thread(target=self._transcribe_loop, daemon=True).start()
+
+    # --- stop (録音中 or 文字起こし中で挙動が変わる) ---
 
     def _stop(self):
-        self._stop_event.set()
-        self._set_status("録音停止中...")
-        self._stop_btn.configure(state="disabled")
+        if self._is_recording:
+            self._recording_stop_event.set()
+            self._set_status("録音停止中...")
+            self._stop_btn.configure(state="disabled")
+        else:
+            # 文字起こし中断
+            self._transcribe_stop_event.set()
+            self._audio_queue.put(None)  # get() でブロック中のスレッドを解放
+            self._stop_btn.configure(state="disabled")
 
-    def _on_recording_done(self):
-        if self._audio_buffer is None or len(self._audio_buffer) == 0:
-            self._set_status("録音データがありません")
-            self._start_btn.configure(state="normal")
-            return
+    def _on_recording_stopped(self):
+        self._is_recording = False
+        self._set_status("録音停止・文字起こし中...")
+        self._stop_btn.configure(state="normal")  # 文字起こし中断ボタンとして再有効化
 
-        self._set_status("文字起こし中...")
+    # --- transcription loop (None または中断イベントで終了) ---
 
-        def _transcribe():
+    def _transcribe_loop(self):
+        while True:
+            chunk = self._audio_queue.get()
+            if chunk is None or self._transcribe_stop_event.is_set():
+                break
+
             def on_segment(text):
                 self.after(0, lambda t=text: self._append_text(t))
-            transcribe_array(self._audio_buffer, self._model, on_segment=on_segment)
-            self.after(0, self._on_transcription_done)
 
-        threading.Thread(target=_transcribe, daemon=True).start()
+            transcribe_array(chunk, self._model, on_segment=on_segment)
 
-    # --- transcription done ---
+        self.after(0, self._on_done)
 
-    def _on_transcription_done(self):
+    def _on_done(self):
         self._set_status("完了")
         self._start_btn.configure(state="normal")
         self._save_btn.configure(state="normal")
+        self._stop_btn.configure(state="disabled")
 
     # --- helpers ---
 
