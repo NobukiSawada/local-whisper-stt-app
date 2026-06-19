@@ -29,18 +29,18 @@ def main():
         "--collect-all", "soundcard",
         "--hidden-import", "keyboard",
     ]
-    print("=== PyInstaller ビルド開始 ===")
+    print("=== PyInstaller build start ===")
     subprocess.run(cmd, check=True, cwd=ROOT)
 
-    # 2. README.md を出力ディレクトリへコピー
+    # 2. Copy README.md into the output directory
     app_dir = DIST_DIR / APP_NAME
     shutil.copy(ROOT / "README.md", app_dir / "README.md")
-    print("README.md をコピーしました")
+    print("Copied README.md")
 
-    # 3. ZIP 圧縮（dist/LoopbackTranscriber/ → LoopbackTranscriber_Release.zip）
+    # 3. ZIP (dist/LoopbackTranscriber/ -> LoopbackTranscriber_Release.zip)
     zip_path = ROOT / ZIP_NAME
     shutil.make_archive(str(zip_path), "zip", DIST_DIR, APP_NAME)
-    print(f"=== 完了: {zip_path}.zip ===")
+    print(f"=== Done: {zip_path}.zip ===")
 
 
 if __name__ == "__main__":
