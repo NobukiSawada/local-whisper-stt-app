@@ -53,5 +53,23 @@ def transcribe(audio_file=INPUT_FILE, model=None):
     return "\n".join(lines)
 
 
+def transcribe_array(audio_array, model, on_segment=None):
+    """Transcribe a float32 numpy array. Calls on_segment(text) for each segment if provided."""
+    segments, _ = model.transcribe(
+        audio_array,
+        language="ja",
+        beam_size=5,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500},
+    )
+    lines = []
+    for seg in segments:
+        text = seg.text.strip()
+        lines.append(text)
+        if on_segment:
+            on_segment(text)
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     transcribe()

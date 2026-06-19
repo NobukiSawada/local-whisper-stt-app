@@ -6,5 +6,5 @@ numpy
 # Step 2: 文字起こし
 faster-whisper
 
-# Step 3以降で追加予定
-# customtkinter
+# Step 4: GUI
+customtkinter

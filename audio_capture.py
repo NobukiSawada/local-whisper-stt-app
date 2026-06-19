@@ -1,6 +1,6 @@
 """
-Step 1: Windows loopback audio capture test script.
-Records 5 seconds of PC speaker output and saves to test_output.wav.
+Windows loopback audio capture module.
+Provides one-shot recording (Step 1) and continuous chunk capture (Step 3+).
 """
 
 import soundcard as sc
@@ -8,7 +8,8 @@ import soundfile as sf
 import numpy as np
 
 SAMPLE_RATE = 16000  # 16kHz — matches Whisper's expected input
-DURATION = 5         # seconds
+DURATION = 5         # seconds (one-shot recording)
+CHUNK_DURATION = 5   # seconds per chunk (continuous capture)
 OUTPUT_FILE = "test_output.wav"
 
 
@@ -46,6 +47,33 @@ def record_loopback(duration=DURATION, sample_rate=SAMPLE_RATE, output_file=OUTP
 
     sf.write(output_file, frames, sample_rate)
     print(f"保存完了: {output_file}  (サンプルレート: {sample_rate} Hz, {duration}秒)")
+
+
+def record_to_buffer(stop_event, sample_rate=SAMPLE_RATE):
+    """Record loopback audio until stop_event is set. Returns a float32 numpy array."""
+    device = find_loopback_device()
+    chunks = []
+    BLOCK = 4096
+    with device.recorder(samplerate=sample_rate) as recorder:
+        while not stop_event.is_set():
+            block = recorder.record(numframes=BLOCK)
+            if block.ndim > 1 and block.shape[1] > 1:
+                block = block.mean(axis=1)
+            chunks.append(block.astype("float32"))
+    return np.concatenate(chunks) if chunks else np.zeros(0, dtype="float32")
+
+
+def capture_loop(audio_queue, chunk_duration=CHUNK_DURATION, sample_rate=SAMPLE_RATE, stop_event=None):
+    """Continuously capture loopback audio and put float32 numpy arrays into audio_queue."""
+    device = find_loopback_device()
+    print(f"録音デバイス: {device.name}")
+
+    with device.recorder(samplerate=sample_rate) as recorder:
+        while not stop_event.is_set():
+            frames = recorder.record(numframes=int(chunk_duration * sample_rate))
+            if frames.ndim > 1 and frames.shape[1] > 1:
+                frames = frames.mean(axis=1)
+            audio_queue.put(frames.astype("float32"))
 
 
 if __name__ == "__main__":
