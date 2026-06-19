@@ -221,3 +221,6 @@ __marimo__/
 *.wav
 test_output*.txt
 transcripts/*.txt
+
+# 要件定義ファイル
+requirements.md
