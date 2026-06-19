@@ -71,6 +71,20 @@ class App(ctk.CTk):
         )
         self._chunk_menu.pack(side="left")
 
+        # 事前知識入力行
+        prompt_frame = ctk.CTkFrame(self, fg_color="transparent")
+        prompt_frame.pack(fill="x", padx=20, pady=(4, 0))
+
+        ctk.CTkLabel(prompt_frame, text="事前知識 / 専門用語（カンマ区切り）:").pack(
+            side="left", padx=(0, 8)
+        )
+        self._prompt_entry = ctk.CTkEntry(
+            prompt_frame,
+            placeholder_text="例: 統計的因果探索, LiNGAM, 因果推論",
+            width=380,
+        )
+        self._prompt_entry.pack(side="left", fill="x", expand=True)
+
         # ボタン行
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(pady=8)
@@ -202,6 +216,8 @@ class App(ctk.CTk):
         self._chunk_menu.configure(state="disabled")
 
         chunk_duration = CHUNK_OPTIONS[self._chunk_var.get()]
+        prompt_text = self._prompt_entry.get().strip()
+        self._initial_prompt = prompt_text if prompt_text else None
 
         def _capture_worker():
             try:
@@ -284,6 +300,7 @@ class App(ctk.CTk):
     def _transcribe_loop(self):
         chunk_index = 0
         chunk_duration = CHUNK_OPTIONS[self._chunk_var.get()]
+        initial_prompt = self._initial_prompt
 
         while True:
             chunk = self._audio_queue.get()
@@ -298,7 +315,8 @@ class App(ctk.CTk):
 
             try:
                 transcribe_array(chunk, self._model, on_segment=on_segment,
-                                 time_offset=time_offset)
+                                 time_offset=time_offset,
+                                 initial_prompt=initial_prompt)
             except Exception as e:
                 self.after(0, lambda: self._set_status(f"文字起こしエラー: {e}"))
 
