@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# テスト時の一時生成ファイル
+*.wav
+test_output*.txt
+transcripts/*.txt
