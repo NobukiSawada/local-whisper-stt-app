@@ -1,9 +1,9 @@
 """
-Step 5: Concurrent recording + transcription GUI.
-Records in chunks and transcribes in parallel; continues transcribing after recording stops.
+Step 6: Progress panel added — recording timer, chunk counter, ETA.
 """
 
 import queue
+import time
 import threading
 from tkinter import filedialog
 
@@ -22,7 +22,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("ループバック文字起こし")
-        self.geometry("720x520")
+        self.geometry("720x600")
         self.resizable(True, True)
 
         self._model = None
@@ -31,15 +31,22 @@ class App(ctk.CTk):
         self._audio_queue = None
         self._is_recording = False
 
+        self._record_start_time = None
+        self._total_chunks = 0
+        self._done_chunks = 0
+        self._chunk_times: list[float] = []
+
         self._build_ui()
         self._load_model_async()
+
+    # ------------------------------------------------------------------ UI --
 
     def _build_ui(self):
         self._status = ctk.CTkLabel(self, text="モデル読み込み中...", anchor="w")
         self._status.pack(fill="x", padx=20, pady=(14, 0))
 
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(pady=10)
+        btn_frame.pack(pady=8)
 
         self._start_btn = ctk.CTkButton(btn_frame, text="開始", width=100,
                                         command=self._start, state="disabled")
@@ -53,10 +60,34 @@ class App(ctk.CTk):
                                        command=self._save, state="disabled")
         self._save_btn.pack(side="left", padx=6)
 
+        # --- 進捗パネル ---
+        info_frame = ctk.CTkFrame(self)
+        info_frame.pack(fill="x", padx=20, pady=(0, 8))
+
+        row1 = ctk.CTkFrame(info_frame, fg_color="transparent")
+        row1.pack(fill="x", padx=12, pady=(8, 2))
+
+        self._rec_time_label = ctk.CTkLabel(row1, text="録音時間:  --:--", anchor="w")
+        self._rec_time_label.pack(side="left")
+
+        self._chunk_label = ctk.CTkLabel(row1, text="チャンク:  0録音 / 0完了", anchor="e")
+        self._chunk_label.pack(side="right")
+
+        row2 = ctk.CTkFrame(info_frame, fg_color="transparent")
+        row2.pack(fill="x", padx=12, pady=(2, 8))
+
+        self._progress_bar = ctk.CTkProgressBar(row2)
+        self._progress_bar.set(0)
+        self._progress_bar.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self._eta_label = ctk.CTkLabel(row2, text="0%完了", anchor="e", width=260)
+        self._eta_label.pack(side="right")
+
+        # --- テキストエリア ---
         self._textbox = ctk.CTkTextbox(self, wrap="word")
         self._textbox.pack(fill="both", expand=True, padx=20, pady=(0, 16))
 
-    # --- model loading ---
+    # --------------------------------------------------------- model loading --
 
     def _load_model_async(self):
         def _load():
@@ -69,14 +100,24 @@ class App(ctk.CTk):
         self._set_status("準備完了")
         self._start_btn.configure(state="normal")
 
-    # --- start ---
+    # --------------------------------------------------------------- start --
 
     def _start(self):
         self._recording_stop_event.clear()
         self._transcribe_stop_event.clear()
         self._is_recording = True
-        self._audio_queue = queue.Queue()  # 無制限キュー: 録音スレッドをブロックしない
+        self._audio_queue = queue.Queue()
+        self._record_start_time = time.time()
+        self._total_chunks = 0
+        self._done_chunks = 0
+        self._chunk_times = []
+
         self._textbox.delete("1.0", "end")
+        self._progress_bar.set(0)
+        self._rec_time_label.configure(text="録音時間:  00:00")
+        self._chunk_label.configure(text="チャンク:  0録音 / 0完了")
+        self._eta_label.configure(text="0%完了")
+
         self._set_status("録音中...")
         self._start_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
@@ -87,13 +128,15 @@ class App(ctk.CTk):
                 audio_queue=self._audio_queue,
                 chunk_duration=CHUNK_DURATION,
                 stop_event=self._recording_stop_event,
+                on_chunk_recorded=lambda: self.after(0, self._on_chunk_recorded),
             )
             self.after(0, self._on_recording_stopped)
 
         threading.Thread(target=_capture_worker, daemon=True).start()
         threading.Thread(target=self._transcribe_loop, daemon=True).start()
+        self.after(1000, self._tick)
 
-    # --- stop (録音中 or 文字起こし中で挙動が変わる) ---
+    # ---------------------------------------------------------------- stop --
 
     def _stop(self):
         if self._is_recording:
@@ -101,17 +144,58 @@ class App(ctk.CTk):
             self._set_status("録音停止中...")
             self._stop_btn.configure(state="disabled")
         else:
-            # 文字起こし中断
             self._transcribe_stop_event.set()
-            self._audio_queue.put(None)  # get() でブロック中のスレッドを解放
+            self._audio_queue.put(None)
             self._stop_btn.configure(state="disabled")
 
     def _on_recording_stopped(self):
         self._is_recording = False
+        elapsed = time.time() - self._record_start_time
+        m, s = divmod(int(elapsed), 60)
+        self._rec_time_label.configure(text=f"録音時間:  {m:02d}:{s:02d}  (確定)")
         self._set_status("録音停止・文字起こし中...")
-        self._stop_btn.configure(state="normal")  # 文字起こし中断ボタンとして再有効化
+        self._stop_btn.configure(state="normal")
 
-    # --- transcription loop (None または中断イベントで終了) ---
+    # ------------------------------------------------------- recording timer --
+
+    def _tick(self):
+        if not self._is_recording:
+            return
+        elapsed = time.time() - self._record_start_time
+        m, s = divmod(int(elapsed), 60)
+        self._rec_time_label.configure(text=f"録音時間:  {m:02d}:{s:02d}")
+        self.after(1000, self._tick)
+
+    # ---------------------------------------------------- chunk event handlers --
+
+    def _on_chunk_recorded(self):
+        self._total_chunks += 1
+        self._update_progress()
+
+    def _on_chunk_done(self, elapsed_sec: float):
+        self._done_chunks += 1
+        self._chunk_times.append(elapsed_sec)
+        self._update_progress()
+
+    def _update_progress(self):
+        total = self._total_chunks
+        done = self._done_chunks
+        ratio = done / total if total > 0 else 0
+
+        self._chunk_label.configure(text=f"チャンク:  {total}録音 / {done}完了")
+        self._progress_bar.set(ratio)
+
+        if self._chunk_times:
+            avg = sum(self._chunk_times) / len(self._chunk_times)
+            remaining = (total - done) * avg
+            rm, rs = divmod(int(remaining), 60)
+            self._eta_label.configure(
+                text=f"{ratio*100:.0f}%完了  残り約{rm}分{rs:02d}秒  ({avg:.0f}秒/チャンク)"
+            )
+        else:
+            self._eta_label.configure(text=f"{ratio*100:.0f}%完了")
+
+    # --------------------------------------------------- transcription loop --
 
     def _transcribe_loop(self):
         while True:
@@ -119,10 +203,14 @@ class App(ctk.CTk):
             if chunk is None or self._transcribe_stop_event.is_set():
                 break
 
+            t0 = time.time()
+
             def on_segment(text):
                 self.after(0, lambda t=text: self._append_text(t))
 
             transcribe_array(chunk, self._model, on_segment=on_segment)
+            elapsed = time.time() - t0
+            self.after(0, lambda e=elapsed: self._on_chunk_done(e))
 
         self.after(0, self._on_done)
 
@@ -131,8 +219,9 @@ class App(ctk.CTk):
         self._start_btn.configure(state="normal")
         self._save_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
+        self._update_progress()
 
-    # --- helpers ---
+    # ---------------------------------------------------------------- helpers --
 
     def _append_text(self, text):
         self._textbox.insert("end", text + "\n")

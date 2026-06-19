@@ -63,7 +63,8 @@ def record_to_buffer(stop_event, sample_rate=SAMPLE_RATE):
     return np.concatenate(chunks) if chunks else np.zeros(0, dtype="float32")
 
 
-def capture_loop(audio_queue, chunk_duration=CHUNK_DURATION, sample_rate=SAMPLE_RATE, stop_event=None):
+def capture_loop(audio_queue, chunk_duration=CHUNK_DURATION, sample_rate=SAMPLE_RATE,
+                 stop_event=None, on_chunk_recorded=None):
     """Continuously capture loopback audio and put float32 numpy arrays into audio_queue."""
     device = find_loopback_device()
     print(f"録音デバイス: {device.name}")
@@ -74,6 +75,8 @@ def capture_loop(audio_queue, chunk_duration=CHUNK_DURATION, sample_rate=SAMPLE_
             if frames.ndim > 1 and frames.shape[1] > 1:
                 frames = frames.mean(axis=1)
             audio_queue.put(frames.astype("float32"))
+            if on_chunk_recorded:
+                on_chunk_recorded()
     audio_queue.put(None)  # 番兵: 文字起こしスレッドに録音終了を通知
 
 
